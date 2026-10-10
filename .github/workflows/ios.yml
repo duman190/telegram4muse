@@ -1,0 +1,49 @@
+name: iOS app
+
+# Compiles the app for the simulator, without signing. macOS minutes are
+# expensive on private repos, so this only runs when iOS code changes.
+on:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        run: |
+          sw_vers
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ios/build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('ios/project.yml') }}
+      - name: Build
+        working-directory: ios
+        run: |
+          status=0
+          xcodebuild build \
+            -project Telegram4Muse.xcodeproj \
+            -scheme Telegram4Muse \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            CODE_SIGNING_ALLOWED=NO > build.log 2>&1 || status=$?
+          grep -E 'error:|warning: .*/(Telegram4Muse|T4MCore)/' build.log | sort -u || true
+          tail -n 20 build.log
+          exit $status

@@ -1,0 +1,16 @@
+{
+  "name": "telegram4muse-bridge",
+  "version": "0.1.0",
+  "description": "Tiny job queue between Muse and the Telegram4Muse iPhone app. Holds no Telegram credentials.",
+  "private": true,
+  "type": "module",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

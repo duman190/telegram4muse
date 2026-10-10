@@ -1,0 +1,5 @@
+// Copy to Local.xcconfig and fill in.
+// Bundle id: anything unique to you. Use the same value as APNS_TOPIC on the bridge.
+T4M_BUNDLE_ID = com.yourname.telegram4muse
+// Team id: developer.apple.com > Account > Membership details.
+T4M_TEAM_ID = ABCDE12345

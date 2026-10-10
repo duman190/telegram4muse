@@ -1,0 +1,18 @@
+# bridge
+bridge/data/
+bridge/.env
+bridge/fly.toml
+node_modules/
+*.p8
+
+# iOS
+ios/Telegram4Muse.xcodeproj/
+ios/Config/Local.xcconfig
+xcuserdata/
+DerivedData/
+.build/
+*.xcworkspace/xcuserdata/
+.DS_Store
+ios/Support/
+ios/build/
+ios/build.log

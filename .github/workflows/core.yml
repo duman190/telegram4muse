@@ -1,0 +1,25 @@
+name: T4MCore
+
+# The app's platform-independent logic, tested on Linux (cheap and fast).
+on:
+  push:
+    paths:
+      - "ios/T4MCore/**"
+      - ".github/workflows/core.yml"
+  pull_request:
+    paths:
+      - "ios/T4MCore/**"
+      - ".github/workflows/core.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Test
+        working-directory: ios/T4MCore
+        run: swift test

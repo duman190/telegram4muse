@@ -1,0 +1,45 @@
+{
+  "status": "succeeded",
+  "steps": [
+    {
+      "action": "send_poll",
+      "index": 0,
+      "ok": true,
+      "result": { "chat_id": -1001234567890, "link": "https://t.me/c/1234567890/1", "message_id": 1048576 }
+    },
+    { "action": "pin_message", "index": 1, "ok": true, "result": {} },
+    {
+      "action": "send_message",
+      "index": 2,
+      "ok": true,
+      "result": { "chat_id": -1001234567890, "message_id": 2097152 }
+    },
+    {
+      "action": "get_poll_results",
+      "index": 3,
+      "ok": true,
+      "result": {
+        "poll": {
+          "can_get_voters": true,
+          "is_anonymous": false,
+          "is_closed": false,
+          "options": [
+            {
+              "text": "Dawn patrol",
+              "vote_percentage": 67,
+              "voter_count": 2,
+              "voters": [
+                { "id": 11, "name": "Kai Moana", "username": "kai" },
+                { "id": 12, "name": "Lena" }
+              ]
+            },
+            { "text": "Midday", "vote_percentage": 33, "voter_count": 1, "voters": [{ "id": 13, "name": "Sam" }] },
+            { "text": "Out", "vote_percentage": 0, "voter_count": 0, "voters": [] }
+          ],
+          "question": "Surf Saturday?",
+          "total_voter_count": 3
+        }
+      }
+    }
+  ]
+}

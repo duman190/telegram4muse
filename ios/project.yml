@@ -1,0 +1,61 @@
+# Generate the Xcode project with XcodeGen:  brew install xcodegen && xcodegen
+name: Telegram4Muse
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+packages:
+  # Prebuilt TDLib (Telegram's official client library) as an XCFramework.
+  # Pinned to TDLib 1.8.68; T4MCore's request builders match that schema.
+  TDLibFramework:
+    url: https://github.com/Swiftgram/TDLibFramework
+    exactVersion: 1.8.68-c15d3f5a
+  T4MCore:
+    path: T4MCore
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Telegram4Muse:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - path: Telegram4Muse
+    dependencies:
+      - package: TDLibFramework
+      - package: T4MCore
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: Telegram4Muse
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSFaceIDUsageDescription: Face ID keeps your Telegram connection and allowed groups locked.
+        UIBackgroundModes:
+          - remote-notification
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).refresh
+    entitlements:
+      path: Support/Telegram4Muse.entitlements
+      properties:
+        aps-environment: development
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(T4M_BUNDLE_ID)
+        DEVELOPMENT_TEAM: $(T4M_TEAM_ID)
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

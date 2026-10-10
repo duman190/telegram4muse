@@ -1,0 +1,6 @@
+// Defaults. Put your own values in Local.xcconfig (copy Local.xcconfig.example);
+// it's git-ignored.
+T4M_BUNDLE_ID = com.example.telegram4muse
+T4M_TEAM_ID =
+
+#include? "Local.xcconfig"

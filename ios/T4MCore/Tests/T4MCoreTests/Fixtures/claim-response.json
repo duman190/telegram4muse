@@ -1,0 +1,49 @@
+{
+  "jobs": [
+    {
+      "id": "job_fixture",
+      "note": "Friday surf poll",
+      "steps": [
+        {
+          "action": "send_poll",
+          "chat_id": -1001234567890,
+          "question": "Surf Saturday?",
+          "options": [
+            "Dawn patrol",
+            "Midday",
+            "Out"
+          ],
+          "is_anonymous": false,
+          "allows_multiple_answers": false,
+          "allows_revoting": false,
+          "silent": false
+        },
+        {
+          "action": "pin_message",
+          "chat_id": -1001234567890,
+          "message": {
+            "step": 0
+          },
+          "notify": false
+        },
+        {
+          "action": "send_message",
+          "chat_id": -1001234567890,
+          "text": "Vote above! 🏄",
+          "silent": true,
+          "reply_to": {
+            "step": 0
+          }
+        },
+        {
+          "action": "get_poll_results",
+          "chat_id": -1001234567890,
+          "message": {
+            "message_id": 1048576
+          },
+          "include_voters": true
+        }
+      ]
+    }
+  ]
+}
