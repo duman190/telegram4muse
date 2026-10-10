@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lets the Muse agent post polls and messages to your allowed Telegram groups, as you, from your Mac over Tailscale."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = [
     # 1.45 speaks Telegram API layer 229, whose poll format this code uses.
     "telethon>=1.45,<2",

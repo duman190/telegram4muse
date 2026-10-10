@@ -36,20 +36,22 @@ retry. The full contract is in [muse-skill/SKILL.md](muse-skill/SKILL.md).
 ## Setup
 
 You need: the MacBook with [Tailscale](https://tailscale.com/download/mac)
-connected, Python 3.10 or newer, and about ten minutes.
+connected, Python 3.9 or newer, and about ten minutes. The `python3` that comes
+with macOS (3.9) works; if Terminal offers to install the developer tools the
+first time you run it, say yes.
 
 ### 1. Install
 
 ```sh
 git clone https://github.com/duman190/telegram4muse.git
 cd telegram4muse
-# Either with uv (https://docs.astral.sh/uv/):
-uv tool install .
-# ...or with a plain virtualenv (macOS's built-in Python is too old; use Homebrew's):
-#   brew install python@3.13
-#   python3.13 -m venv ~/.telegram4muse && ~/.telegram4muse/bin/pip install .
-#   ln -s ~/.telegram4muse/bin/t4m /opt/homebrew/bin/t4m
+python3 -m venv ~/.telegram4muse
+~/.telegram4muse/bin/pip install --upgrade pip
+~/.telegram4muse/bin/pip install .
+sudo mkdir -p /usr/local/bin && sudo ln -sf ~/.telegram4muse/bin/t4m /usr/local/bin/t4m   # puts `t4m` on your PATH
 ```
+
+If you use [uv](https://docs.astral.sh/uv/), `uv tool install .` does the same in one step.
 
 ### 2. Telegram API credentials, then sign in
 
