@@ -3,7 +3,7 @@
 Everything is kept in one private folder (mode 0700):
 
     ~/Library/Application Support/telegram4muse/
-        config.json        api_id/api_hash, Muse's token, address, allowed groups
+        config.json        api_id/api_hash, address, allowed devices and groups
         telegram.session   your Telegram login (Telethon); never leaves this Mac
         jobs.json          recent jobs, for idempotent retries and lookups
 
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -61,19 +60,16 @@ def write_private(path: Path, text: str) -> None:
         raise
 
 
-def new_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
 @dataclass
 class Config:
     api_id: int
     api_hash: str
-    agent_token: str = field(default_factory=new_token)
     # "auto" = this Mac's Tailscale IPv4 address, looked up at startup.
     host: str = "auto"
     port: int = DEFAULT_PORT
-    # If set, only these tailnet addresses may call the API (e.g. Muse's).
+    # Tailscale addresses of the devices that may call the API (Muse's). Tailscale
+    # ties each address to one device's key, so the address is the identity.
+    # Calls from this Mac itself are always allowed.
     allowed_peers: list[str] = field(default_factory=list)
     # Groups Muse may use: [{"id": -100..., "title": "...", "type": "supergroup"}]
     allowed_chats: list[dict] = field(default_factory=list)
@@ -95,5 +91,6 @@ def load() -> Config:
     if not path.exists():
         raise NotConfigured(f"No config at {path}. Run `t4m setup` first.")
     data = json.loads(path.read_text(encoding="utf-8"))
+    # Unknown keys (like agent_token from older versions) are ignored.
     known = Config.__dataclass_fields__.keys()
     return Config(**{k: v for k, v in data.items() if k in known})

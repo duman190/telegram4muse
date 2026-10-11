@@ -20,9 +20,7 @@ _local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def _local_get(cfg: config.Config, path: str, timeout: float = 60) -> dict:
     """GET from the running service on 127.0.0.1. Raises URLError if it isn't running."""
-    request = urllib.request.Request(f"http://127.0.0.1:{cfg.port}{path}",
-                                     headers={"Authorization": f"Bearer {cfg.agent_token}"})
-    with _local.open(request, timeout=timeout) as response:
+    with _local.open(f"http://127.0.0.1:{cfg.port}{path}", timeout=timeout) as response:
         return json.load(response)
 
 
@@ -59,23 +57,81 @@ async def _groups_direct(cfg: config.Config) -> list[dict]:
         await client.disconnect()
 
 
-def match_groups(groups: list[dict], term: str) -> list[dict]:
-    """By id, else exact title (any case), else title substring."""
-    if re.fullmatch(r"-?\d+", term.strip()):
-        return [g for g in groups if g["id"] == int(term)]
-    lowered = term.strip().lower()
-    exact = [g for g in groups if g["title"].lower() == lowered]
-    return exact or [g for g in groups if lowered in g["title"].lower()]
+def _words(text: str) -> str:
+    """Lowercase words only: "Surf! (Bay Area)" -> "surf bay area"."""
+    return " ".join(re.sub(r"[\W_]+", " ", text.lower()).split())
 
 
-def _pick(groups: list[dict], term: str) -> dict:
-    found = match_groups(groups, term)
+def match_groups(groups: list[dict], query: str) -> list[dict]:
+    """By id; else exact title; else the same words ignoring punctuation and
+    case; else titles containing every word typed."""
+    query = query.strip()
+    if re.fullmatch(r"-?\d+", query):
+        return [g for g in groups if g["id"] == int(query)]
+    exact = [g for g in groups if g["title"].strip().lower() == query.lower()]
+    if exact:
+        return exact
+    words = _words(query)
+    if not words:
+        return []
+    same = [g for g in groups if _words(g["title"]) == words]
+    return same or [g for g in groups if all(w in _words(g["title"]) for w in words.split())]
+
+
+def _pick(groups: list[dict], query: str) -> dict:
+    found = match_groups(groups, query)
     if not found:
-        sys.exit(f'No group matches "{term}". See `t4m groups`.')
+        sys.exit(f'No group matches "{query}". Run the same command without a name to pick from a list.')
     if len(found) > 1:
-        names = "\n".join(f"  {g['id']}  {g['title']}" for g in found)
-        sys.exit(f'"{term}" matches more than one group; use the id:\n{names}')
+        names = "\n".join(f"  {g['id']:>16}  {g['title']}" for g in found)
+        sys.exit(f'"{query}" matches more than one group:\n{names}\n'
+                 "Add more words, use the id, or run the command without a name to pick from a list.")
     return found[0]
+
+
+def _resolve(groups: list[dict], words: list[str]) -> list[dict]:
+    """Command-line words are one name (no quotes needed), or one or more ids."""
+    if all(re.fullmatch(r"-?\d+", w) for w in words):
+        return [_pick(groups, w) for w in words]
+    return [_pick(groups, " ".join(words))]
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _choose(groups: list[dict], allowed: set[int], question: str) -> list[dict]:
+    """Numbered list; the person types numbers. Sidesteps shell quoting entirely."""
+    if not _interactive():
+        sys.exit("Give a group name or id.")
+    width = len(str(len(groups)))
+    for n, g in enumerate(groups, 1):
+        print(f"{n:>{width}}. {'✓' if g['id'] in allowed else ' '} {g['title']}  ({g['type']}, {g['id']})")
+    answer = input(question).strip()
+    chosen = []
+    for part in re.split(r"[,\s]+", answer) if answer else []:
+        if not part.isdigit() or not 1 <= int(part) <= len(groups):
+            sys.exit(f'"{part}" isn\'t a number from the list.')
+        chosen.append(groups[int(part) - 1])
+    return chosen
+
+
+def _parse_peers(values: list[str]) -> list[str]:
+    peers = []
+    for value in values:
+        for item in value.split(","):
+            if item.strip():
+                try:
+                    peers.append(tailscale.device_ip(item))
+                except ValueError as e:
+                    sys.exit(str(e))
+    return peers
+
+
+def _describe_peers(cfg: config.Config) -> str:
+    if cfg.allowed_peers:
+        return ", ".join(cfg.allowed_peers) + " (and this Mac)"
+    return "only this Mac. Allow Muse with: t4m peers <muse's Tailscale name or IP>"
 
 
 # --- commands ---
@@ -100,15 +156,17 @@ def cmd_setup(_args) -> None:
         print(f"   This Mac's Tailscale address: {address}. The service will listen only there.")
     else:
         print("   Tailscale isn't connected right now. That's fine for setup; the service waits for it.")
+    print("   Only the devices you name here can call the service (plus this Mac).")
     peers_default = ", ".join(old.allowed_peers) if old and old.allowed_peers else ""
-    raw_peers = input("   Muse's Tailscale IP, to accept calls only from it (Enter = any device on your tailnet)"
+    raw_peers = input("   Muse's Tailscale name or IP, from `tailscale status`"
                       f"{f' [{peers_default}]' if peers_default else ''}: ").strip()
-    peers = [p.strip() for p in raw_peers.split(",") if p.strip()] if raw_peers else (old.allowed_peers if old else [])
+    peers = _parse_peers([raw_peers]) if raw_peers else (old.allowed_peers if old else [])
+    if peers:
+        print(f"   Allowed: {', '.join(peers)}")
 
     cfg = config.Config(
         api_id=int(raw_id),
         api_hash=api_hash,
-        agent_token=old.agent_token if old else config.new_token(),
         host=old.host if old else "auto",
         port=old.port if old else config.DEFAULT_PORT,
         allowed_peers=peers,
@@ -120,10 +178,11 @@ def cmd_setup(_args) -> None:
     print("\n3. Sign in to Telegram")
     cmd_login(None)
     print("\nNext:")
-    print("  t4m groups               list your groups")
-    print('  t4m allow "Surf Crew"    let Muse use one')
+    print("  t4m allow                pick the groups Muse may use")
     print("  t4m service install      run in the background, start at login")
-    print("  t4m status               the address and token to give Muse")
+    print("  t4m status               the address to give Muse")
+    if not peers:
+        print("  t4m peers <muse>         let Muse's device call (by Tailscale name or IP)")
 
 
 def cmd_login(_args) -> None:
@@ -151,29 +210,45 @@ def cmd_groups(_args) -> None:
     print(f"{'':2}{'id':>16}  {'type':<11}title")
     for g in sorted(groups, key=lambda g: (g["id"] not in allowed, g["title"].lower())):
         print(f"{'✓' if g['id'] in allowed else ' ':2}{g['id']:>16}  {g['type']:<11}{g['title']}")
-    print(f"\n✓ = Muse may use it ({len(allowed)} allowed). Change with `t4m allow` / `t4m disallow`.")
+    print(f"\n✓ = Muse may use it ({len(allowed)} allowed). Change with `t4m allow` / `t4m disallow`;"
+          " without a name they show a list to pick from.")
 
 
 def cmd_allow(args) -> None:
     cfg = config.load()
-    groups = fetch_groups(cfg)
-    for term in args.groups:
-        group = _pick(groups, term)
+    groups = sorted(fetch_groups(cfg), key=lambda g: g["title"].lower())
+    if args.name:
+        chosen = _resolve(groups, args.name)
+    else:
+        chosen = _choose(groups, cfg.allowed_chat_ids, "Number(s) to allow, e.g. 3 or 3,5 (Enter to cancel): ")
+    changed = False
+    for group in chosen:
         if group["id"] in cfg.allowed_chat_ids:
             print(f"Already allowed: {group['title']}")
             continue
         cfg.allowed_chats.append(group)
+        changed = True
         print(f"Allowed: {group['title']} ({group['id']})")
-    cfg.save()
+    if changed:
+        cfg.save()
 
 
 def cmd_disallow(args) -> None:
     cfg = config.load()
-    for term in args.groups:
-        group = _pick(cfg.allowed_chats, term)
-        cfg.allowed_chats = [c for c in cfg.allowed_chats if c["id"] != group["id"]]
+    if not cfg.allowed_chats:
+        print("No groups are allowed.")
+        return
+    allowed = sorted(cfg.allowed_chats, key=lambda g: g["title"].lower())
+    if args.name:
+        chosen = _resolve(allowed, args.name)
+    else:
+        chosen = _choose(allowed, set(), "Number(s) to remove (Enter to cancel): ")
+    removed = {g["id"] for g in chosen}
+    if removed:
+        cfg.allowed_chats = [c for c in cfg.allowed_chats if c["id"] not in removed]
+        cfg.save()
+    for group in chosen:
         print(f"Removed: {group['title']}")
-    cfg.save()
 
 
 def cmd_peers(args) -> None:
@@ -181,19 +256,10 @@ def cmd_peers(args) -> None:
     if args.clear:
         cfg.allowed_peers = []
         cfg.save()
-    elif args.addresses:
-        cfg.allowed_peers = args.addresses
+    elif args.devices:
+        cfg.allowed_peers = _parse_peers(args.devices)
         cfg.save()
-    print("Accepting calls from: " + (", ".join(cfg.allowed_peers) if cfg.allowed_peers else "any device on your tailnet"))
-
-
-def cmd_token(args) -> None:
-    cfg = config.load()
-    if args.rotate:
-        cfg.agent_token = config.new_token()
-        cfg.save()
-        print("New token; the old one no longer works. Update it in Muse:", file=sys.stderr)
-    print(cfg.agent_token)
+    print("Accepting calls from " + _describe_peers(cfg))
 
 
 def cmd_status(_args) -> None:
@@ -203,8 +269,7 @@ def cmd_status(_args) -> None:
     except RuntimeError as e:
         host = f"(unknown: {e})"
     print(f"Address for Muse:  http://{host}:{cfg.port}")
-    print("Token for Muse:    t4m token   (enter it in Muse's secure entry, not in chat)")
-    print("Accepting calls:   " + (", ".join(cfg.allowed_peers) if cfg.allowed_peers else "any device on your tailnet"))
+    print("Accepting calls:   from " + _describe_peers(cfg))
     print(f"Allowed groups:    {len(cfg.allowed_chats)}")
     for chat in cfg.allowed_chats:
         print(f"                   {chat['title']} ({chat['id']})")
@@ -254,19 +319,17 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("setup", help="first-time setup: API credentials, network, sign-in").set_defaults(fn=cmd_setup)
     sub.add_parser("login", help="sign in to Telegram (again)").set_defaults(fn=cmd_login)
     sub.add_parser("groups", help="list your groups and which ones Muse may use").set_defaults(fn=cmd_groups)
-    p = sub.add_parser("allow", help="let Muse use a group (id or name)")
-    p.add_argument("groups", nargs="+", metavar="GROUP")
+    name_help = "group name (no quotes needed, punctuation optional) or id; leave out to pick from a list"
+    p = sub.add_parser("allow", help="let Muse use a group")
+    p.add_argument("name", nargs="*", metavar="NAME_OR_ID", help=name_help)
     p.set_defaults(fn=cmd_allow)
     p = sub.add_parser("disallow", help="take a group away from Muse")
-    p.add_argument("groups", nargs="+", metavar="GROUP")
+    p.add_argument("name", nargs="*", metavar="NAME_OR_ID", help=name_help)
     p.set_defaults(fn=cmd_disallow)
-    p = sub.add_parser("peers", help="limit which tailnet devices may call (e.g. only Muse)")
-    p.add_argument("addresses", nargs="*", metavar="TAILSCALE_IP")
-    p.add_argument("--clear", action="store_true", help="accept any device on the tailnet")
+    p = sub.add_parser("peers", help="which tailnet devices may call (Muse's)")
+    p.add_argument("devices", nargs="*", metavar="DEVICE", help="Tailscale name (like muse) or IP; replaces the list")
+    p.add_argument("--clear", action="store_true", help="no devices; only this Mac may call")
     p.set_defaults(fn=cmd_peers)
-    p = sub.add_parser("token", help="print the token Muse uses")
-    p.add_argument("--rotate", action="store_true", help="make a new one (the old one stops working)")
-    p.set_defaults(fn=cmd_token)
     sub.add_parser("status", help="address, groups, service and sign-in state").set_defaults(fn=cmd_status)
     sub.add_parser("serve", help="run the service in the foreground").set_defaults(fn=cmd_serve)
     p = sub.add_parser("service", help="background service (launchd)")

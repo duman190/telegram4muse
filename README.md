@@ -9,7 +9,7 @@ posting to groups you allow.
  Muse (cloud agent)                 your MacBook                      Telegram
  ┌──────────────┐   Tailscale     ┌───────────────────────────┐     ┌──────────┐
  │ Friday job   │ ──────────────▶ │ t4m service (launchd)     │ ──▶ │ Surf Crew│
- │ + skill      │  POST /v1/jobs  │  · token + tailnet only   │     │  poll    │
+ │ + skill      │  POST /v1/jobs  │  · Muse's device only     │     │  poll    │
  │              │ ◀────────────── │  · allowed groups only    │     │  reply   │
  └──────────────┘    result       │  · Telethon session (you) │     │  pin     │
                                   └───────────────────────────┘     └──────────┘
@@ -17,14 +17,15 @@ posting to groups you allow.
 
 - **Your login stays on the Mac.** You sign in once in Terminal; the Telethon
   session file sits in a private folder (`0700`/`0600`) and never leaves the
-  machine. Muse only gets an API token for this service.
+  machine. Muse gets nothing secret, not even a token.
 - **Allowed groups only.** You pick groups with `t4m allow`; every job is checked
   against that list before anything is sent. Private chats can't be allowed.
-- **Tailnet only.** The service listens on the Mac's Tailscale address (plus
-  `127.0.0.1` for the CLI), requires a bearer token, and can be limited to Muse's
-  device.
+- **Muse's device only.** The service listens only on the Mac's Tailscale
+  address and answers only the devices you name with `t4m peers` (Muse's), plus
+  the Mac itself. Tailscale ties each address to one device's key, so another
+  device can't pretend to be Muse.
 - **Kill switch.** The session shows up in Telegram → Settings → Devices as
-  "Mac (Telegram4Muse)". End it there, or run `t4m token --rotate`, and Muse is out.
+  "Mac (Telegram4Muse)". End it there, or run `t4m peers --clear`, and Muse is out.
 
 ## What Muse can do
 
@@ -62,16 +63,18 @@ create an app (any name; platform "Desktop"). Then:
 t4m setup
 ```
 
-It asks for the `api_id` and `api_hash`, optionally Muse's Tailscale IP, then
-signs you in to Telegram: phone number, the code Telegram sends to your
-Telegram app, and your two-step password if you have one.
+It asks for the `api_id` and `api_hash`, then Muse's Tailscale device name or
+IP (`tailscale status` lists your devices; the name `muse` works), then signs
+you in to Telegram: phone number, the code Telegram sends to your Telegram app,
+and your two-step password if you have one.
 
 ### 3. Choose the groups Muse may use
 
 ```sh
-t4m groups                 # all your groups and channels, with ids
-t4m allow "Surf Crew"      # by name or id; repeat for more
-t4m disallow "Surf Crew"   # take it back; applies immediately
+t4m allow                   # numbered list of your groups; type the number(s)
+t4m allow surf bay area     # or by name: no quotes needed, punctuation ignored
+t4m groups                  # what's allowed (✓)
+t4m disallow                # take one back; applies immediately
 ```
 
 ### 4. Run it in the background
@@ -87,14 +90,15 @@ Logs are in `~/Library/Logs/telegram4muse.log`.
 ### 5. Connect Muse
 
 ```sh
-t4m status    # "Address for Muse: http://100.x.y.z:8787"
-t4m token     # the token
+t4m peers muse   # if you skipped it in setup: Muse's Tailscale name or IP
+t4m status       # "Address for Muse: http://100.x.y.z:8787"
 ```
 
-Give both to Muse through its secure entry (as `T4M_URL` and `T4M_TOKEN`), not
-in chat, and give it [muse-skill/SKILL.md](muse-skill/SKILL.md) as a workspace
-skill. Then ask Muse to call `GET /v1/status` and post a test poll in a test
-group before pointing the Friday job at it.
+Give Muse the address (as `T4M_URL`) and [muse-skill/SKILL.md](muse-skill/SKILL.md)
+as a workspace skill. There's no token to hand over. Then ask Muse to call
+`GET /v1/status` and post a test poll in a test group before pointing the
+Friday job at it. If Muse gets `403 forbidden`, the error includes the exact
+`t4m peers ...` command to run.
 
 ## Good to know
 
@@ -119,9 +123,15 @@ reach every device on your tailnet, including the iPhone and iPads. In the
 Tagged devices aren't covered by rules for your own devices (`autogroup:member`),
 so this rule is all Muse gets. If your policy still has the default allow-all
 rule (`"src": ["*"]`), change that `*` to `autogroup:member`, or the tag
-restricts nothing. You can also run `t4m peers <muse's tailscale ip>` so the
-service itself only answers Muse. Don't put it behind `tailscale serve` or
-Funnel: it already listens on the tailnet, and Funnel would put it on the internet.
+restricts nothing. (`t4m peers` already makes the service answer only Muse; the
+access controls keep Muse away from your other devices.) Don't put the service
+behind `tailscale serve` or Funnel: it already listens on the tailnet, and
+proxied requests would look like they come from the Mac itself.
+
+**Programs on the Mac can call it.** Calls from the Mac itself are always
+allowed; that's how the `t4m` commands talk to the service. Anything running
+as you could also read the Telegram session file, so this doesn't open a new
+door.
 
 **macOS firewall.** If it's on and blocks incoming connections, allow the
 Python that runs `t4m` in System Settings → Network → Firewall → Options.
@@ -132,6 +142,8 @@ do. A weekly poll is ordinary use; mass messaging gets accounts limited.
 
 **Re-signing in.** `t4m login` pauses the background service while you sign in.
 
+**Updating.** In your clone: `git pull && ~/.telegram4muse/bin/pip install . && t4m service restart`.
+
 ## Commands
 
 | | |
@@ -139,9 +151,8 @@ do. A weekly poll is ordinary use; mass messaging gets accounts limited.
 | `t4m setup` | API credentials, network, sign-in |
 | `t4m login` | sign in again |
 | `t4m groups` | list groups; ✓ marks allowed ones |
-| `t4m allow GROUP...` / `t4m disallow GROUP...` | change what Muse may use (name or id) |
-| `t4m peers [IP...]` / `t4m peers --clear` | which tailnet devices may call |
-| `t4m token [--rotate]` | print or replace Muse's token |
+| `t4m allow [NAME_OR_ID]` / `t4m disallow [NAME_OR_ID]` | change what Muse may use; no name shows a list to pick from |
+| `t4m peers [DEVICE...]` / `t4m peers --clear` | which tailnet devices may call (Tailscale name or IP) |
 | `t4m status` | address, groups, service, sign-in |
 | `t4m service install [--keep-awake] \| uninstall \| start \| stop \| restart` | launchd |
 | `t4m serve` | run in the foreground (for debugging) |

@@ -9,8 +9,7 @@ from fakes import FakeTelegram
 from telegram4muse import config, server
 
 CHAT = -1001234567890
-TOKEN = "test-token-0123456789"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
+MUSE = "100.64.0.99"
 
 SURF = {
     "chat_id": CHAT,
@@ -24,14 +23,14 @@ SURF = {
 
 
 def make_config(**overrides) -> config.Config:
-    values = dict(api_id=1, api_hash="0" * 32, agent_token=TOKEN,
+    values = dict(api_id=1, api_hash="0" * 32, allowed_peers=[MUSE],
                   allowed_chats=[{"id": CHAT, "title": "Surf Crew", "type": "supergroup"}])
     values.update(overrides)
     return config.Config(**values)
 
 
 class Harness:
-    def __init__(self, cfg=None, tg=None, store=None, peer="100.64.0.7"):
+    def __init__(self, cfg=None, tg=None, store=None, peer=MUSE):
         self.cfg = cfg or make_config()
         self.tg = tg or FakeTelegram()
         self.store = store or server.JobStore(None)
@@ -46,12 +45,10 @@ class Harness:
         asyncio.run(go())
 
 
-def test_auth():
+def test_status():
     async def test(c):
         assert (await c.get("/healthz")).status == 200
-        assert (await c.get("/v1/status")).status == 401
-        assert (await c.get("/v1/status", headers={"Authorization": "Bearer nope"})).status == 401
-        r = await c.get("/v1/status", headers=AUTH)
+        r = await c.get("/v1/status")
         assert r.status == 200
         body = await r.json()
         assert body["telegram"] == {"signed_in": True, "account": "Dmitrii (@duman)", "problem": None}
@@ -59,24 +56,35 @@ def test_auth():
     Harness().run(test)
 
 
-def test_only_allowed_peers_when_configured():
-    async def blocked(c):
-        r = await c.get("/v1/chats", headers=AUTH)
+def test_only_allowed_devices_and_this_mac_may_call():
+    async def refused(c):
+        r = await c.post("/v1/jobs", json=SURF)
         assert r.status == 403
-        assert (await r.json())["error"]["code"] == "forbidden"
-    Harness(cfg=make_config(allowed_peers=["100.64.0.99"]), peer="100.64.0.7").run(blocked)
+        error = (await r.json())["error"]
+        assert error["code"] == "forbidden"
+        assert "t4m peers 100.64.0.7" in error["message"]
+        assert (await c.get("/v1/chats")).status == 403
+        assert (await c.get("/healthz")).status == 200
+    Harness(peer="100.64.0.7").run(refused)
+    # With no devices allowed, only the Mac itself gets in.
+    Harness(cfg=make_config(allowed_peers=[]), peer="100.64.0.7").run(refused)
 
     async def allowed(c):
-        assert (await c.get("/v1/chats", headers=AUTH)).status == 200
-    Harness(cfg=make_config(allowed_peers=["100.64.0.99"]), peer="100.64.0.99").run(allowed)
-    # The CLI on the Mac itself is always let through.
-    Harness(cfg=make_config(allowed_peers=["100.64.0.99"]), peer="127.0.0.1").run(allowed)
+        assert (await c.get("/v1/chats")).status == 200
+    Harness(peer=MUSE).run(allowed)
+    Harness(peer=f"::ffff:{MUSE}").run(allowed)
+    Harness(cfg=make_config(allowed_peers=[]), peer="127.0.0.1").run(allowed)
+    Harness(cfg=make_config(allowed_peers=[]), peer="::1").run(allowed)
+
+    async def no_address(c):
+        assert (await c.get("/v1/chats")).status == 403
+    Harness(peer=None).run(no_address)
 
 
 def test_admin_groups_only_from_this_mac():
     async def remote(c):
-        assert (await c.get("/admin/groups", headers=AUTH)).status == 403
-    Harness(peer="100.64.0.7").run(remote)
+        assert (await c.get("/admin/groups")).status == 403
+    Harness(peer=MUSE).run(remote)
 
     async def local(c):
         r = await c.get("/admin/groups")
@@ -87,7 +95,7 @@ def test_admin_groups_only_from_this_mac():
 
 def test_chats_lists_only_allowed_groups():
     async def test(c):
-        body = await (await c.get("/v1/chats", headers=AUTH)).json()
+        body = await (await c.get("/v1/chats")).json()
         assert body == {"chats": [{"id": CHAT, "title": "Surf Crew", "type": "supergroup"}]}
     Harness().run(test)
 
@@ -96,7 +104,7 @@ def test_runs_a_job_and_returns_the_result():
     h = Harness()
 
     async def test(c):
-        r = await c.post("/v1/jobs", json=SURF, headers=AUTH)
+        r = await c.post("/v1/jobs", json=SURF)
         assert r.status == 200
         job = await r.json()
         assert job["status"] == "succeeded"
@@ -106,12 +114,12 @@ def test_runs_a_job_and_returns_the_result():
         assert job["result"]["steps"][1] == {"index": 1, "action": "pin_message", "ok": True, "result": {}}
         assert [call[0] for call in h.tg.calls] == ["send_poll", "pin_message"]
 
-        assert (await (await c.get(f"/v1/jobs/{job['id']}", headers=AUTH)).json())["id"] == job["id"]
-        assert [j["id"] for j in (await (await c.get("/v1/jobs?limit=5", headers=AUTH)).json())["jobs"]] == [job["id"]]
-        assert (await c.get("/v1/jobs/job_nope", headers=AUTH)).status == 404
+        assert (await (await c.get(f"/v1/jobs/{job['id']}")).json())["id"] == job["id"]
+        assert [j["id"] for j in (await (await c.get("/v1/jobs?limit=5")).json())["jobs"]] == [job["id"]]
+        assert (await c.get("/v1/jobs/job_nope")).status == 404
 
         # A retry with the same idempotency key returns the earlier result and posts nothing.
-        again = await (await c.post("/v1/jobs", json=SURF, headers=AUTH)).json()
+        again = await (await c.post("/v1/jobs", json=SURF)).json()
         assert again["id"] == job["id"]
         assert again["replayed"] is True
         assert len(h.tg.calls) == 2
@@ -123,7 +131,7 @@ def test_failed_steps_are_reported_not_raised():
     h.tg.fail_on = "pin_message"
 
     async def test(c):
-        r = await c.post("/v1/jobs", json=SURF, headers=AUTH)
+        r = await c.post("/v1/jobs", json=SURF)
         assert r.status == 200
         job = await r.json()
         assert job["status"] == "failed"
@@ -134,7 +142,7 @@ def test_failed_steps_are_reported_not_raised():
 
 def test_refusals():
     async def no_groups(c):
-        r = await c.post("/v1/jobs", json=SURF, headers=AUTH)
+        r = await c.post("/v1/jobs", json=SURF)
         assert r.status == 409
         assert (await r.json())["error"]["code"] == "no_allowed_chats"
     Harness(cfg=make_config(allowed_chats=[])).run(no_groups)
@@ -142,23 +150,22 @@ def test_refusals():
     h = Harness()
 
     async def others(c):
-        r = await c.post("/v1/jobs", json={**SURF, "chat_id": -1009}, headers=AUTH)
+        r = await c.post("/v1/jobs", json={**SURF, "chat_id": -1009})
         assert r.status == 403
         assert (await r.json())["error"]["code"] == "chat_not_allowed"
-        r = await c.post("/v1/jobs", data="{not json", headers=AUTH)
+        r = await c.post("/v1/jobs", data="{not json")
         assert r.status == 400
         assert (await r.json())["error"]["code"] == "invalid_json"
-        r = await c.post("/v1/jobs", json={"chat_id": CHAT, "steps": [{"action": "send_poll", "question": "q", "options": ["a"]}]},
-                         headers=AUTH)
+        r = await c.post("/v1/jobs", json={"chat_id": CHAT, "steps": [{"action": "send_poll", "question": "q", "options": ["a"]}]})
         assert r.status == 400
         assert "2-12 entries" in (await r.json())["error"]["message"]
-        r = await c.post("/v1/jobs", data="x" * (server.MAX_BODY + 10), headers=AUTH)
+        r = await c.post("/v1/jobs", data="x" * (server.MAX_BODY + 10))
         assert r.status == 413
         assert h.tg.calls == []
     h.run(others)
 
     async def signed_out(c):
-        r = await c.post("/v1/jobs", json=SURF, headers=AUTH)
+        r = await c.post("/v1/jobs", json=SURF)
         assert r.status == 503
         assert (await r.json())["error"]["code"] == "not_signed_in"
     Harness(tg=FakeTelegram(account=None)).run(signed_out)
@@ -168,9 +175,9 @@ def test_allowlist_changes_apply_without_a_restart():
     h = Harness()
 
     async def test(c):
-        assert (await c.post("/v1/jobs", json={**SURF, "chat_id": -1009, "idempotency_key": None}, headers=AUTH)).status == 403
+        assert (await c.post("/v1/jobs", json={**SURF, "chat_id": -1009, "idempotency_key": None})).status == 403
         h.cfg.allowed_chats.append({"id": -1009, "title": "Family", "type": "group"})
-        assert (await c.post("/v1/jobs", json={**SURF, "chat_id": -1009, "idempotency_key": None}, headers=AUTH)).status == 200
+        assert (await c.post("/v1/jobs", json={**SURF, "chat_id": -1009, "idempotency_key": None})).status == 200
     h.run(test)
 
 

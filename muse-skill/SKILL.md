@@ -14,18 +14,17 @@ Dmitrii allowed on the Mac. Anything else is refused.
 
 ## Setup (once)
 
-Two secrets, entered through secure entry, never pasted in chat:
+One setting, `T4M_URL`: the address `t4m status` prints on the Mac, e.g.
+`http://100.101.102.103:8787`.
 
-- `T4M_URL`: the address `t4m status` prints on the Mac, e.g. `http://100.101.102.103:8787`
-- `T4M_TOKEN`: the output of `t4m token` on the Mac
-
-Every request sends `Authorization: Bearer $T4M_TOKEN`.
+There's no token. The Mac recognizes you by your device's Tailscale address,
+so call it from your tailnet device ("muse"). Calls from anywhere else get
+`403 forbidden`.
 
 ```sh
-curl -s "$T4M_URL/v1/status" -H "Authorization: Bearer $T4M_TOKEN"
-curl -s "$T4M_URL/v1/chats"  -H "Authorization: Bearer $T4M_TOKEN"
-curl -s "$T4M_URL/v1/jobs"   -H "Authorization: Bearer $T4M_TOKEN" \
-     -H "Content-Type: application/json" -d @job.json
+curl -s "$T4M_URL/v1/status"
+curl -s "$T4M_URL/v1/chats"
+curl -s "$T4M_URL/v1/jobs" -H "Content-Type: application/json" -d @job.json
 ```
 
 Allow up to 2 minutes for `POST /v1/jobs`; reading voters on a big poll takes a while.
@@ -33,7 +32,7 @@ Allow up to 2 minutes for `POST /v1/jobs`; reading voters on a big poll takes a 
 ## Rules
 
 1. **Get chat ids from `GET /v1/chats`.** Never guess one. If the group you need
-   isn't listed, ask Dmitrii to run `t4m allow "<group name>"` on the Mac.
+   isn't listed, ask Dmitrii to run `t4m allow` on the Mac and pick it.
 2. **Everything you post appears as Dmitrii.** Write in Dmitrii's voice, and
    don't post anything Dmitrii hasn't asked for or agreed to as a routine.
 3. **Set `idempotency_key` on every job that posts** (e.g. `surf-poll-2026-10-16`).
@@ -69,9 +68,10 @@ ran (`ok: true`), which failed, and which were skipped. Steps that already ran
 are not undone.
 
 Errors before anything runs come back as `{"error": {"code", "message"}}`:
-`400 invalid_request` (the message names the field), `401 unauthorized`,
-`403 chat_not_allowed`, `403 forbidden` (this device isn't allowed),
-`409 no_allowed_chats`, `503 not_signed_in` (Dmitrii needs to run `t4m login`).
+`400 invalid_request` (the message names the field), `403 chat_not_allowed`,
+`403 forbidden` (your device isn't allowed; the message has the exact
+`t4m peers ...` command for Dmitrii to run on the Mac), `409 no_allowed_chats`,
+`503 not_signed_in` (Dmitrii needs to run `t4m login`).
 
 ## Weekly surf poll
 

@@ -8,15 +8,15 @@
     GET  /v1/jobs/{id}       one job
     GET  /admin/groups       all your groups; only from this Mac (used by `t4m groups`)
 
-/v1 needs "Authorization: Bearer <agent_token>". The service listens on the
-Tailscale address (plus 127.0.0.1 for the CLI), and can be limited further to
-specific tailnet peers with `allowed_peers`.
+Who may call: the service listens only on the Mac's Tailscale address (plus
+127.0.0.1 for the CLI) and answers /v1 only for devices in `allowed_peers`
+(Muse's Tailscale IP) and for this Mac itself. On a tailnet an address can't be
+spoofed: Tailscale ties it to one device's key, so no token is needed.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hmac
 import ipaddress
 import json
 import logging
@@ -69,11 +69,23 @@ def _error(status: int, code: str, message: str) -> web.Response:
     return web.json_response({"error": {"code": code, "message": message}}, status=status)
 
 
-def _is_loopback(address: str | None) -> bool:
+def _ip(address: str | None):
+    """Parsed address (IPv4-mapped IPv6 unwrapped), or None."""
     try:
-        return ipaddress.ip_address(address or "").is_loopback
+        ip = ipaddress.ip_address(address or "")
     except ValueError:
-        return False
+        return None
+    return getattr(ip, "ipv4_mapped", None) or ip
+
+
+def _is_loopback(address: str | None) -> bool:
+    ip = _ip(address)
+    return bool(ip and ip.is_loopback)
+
+
+def _is_allowed_peer(address: str | None, allowed: list[str]) -> bool:
+    ip = _ip(address)
+    return ip is not None and any(ip == _ip(a) for a in allowed)
 
 
 def create_app(*, load_config: Callable[[], config.Config], backend: Any, store: JobStore,
@@ -90,14 +102,9 @@ def create_app(*, load_config: Callable[[], config.Config], backend: Any, store:
         if request.path.startswith("/admin/"):
             if not _is_loopback(peer):
                 return _error(403, "forbidden", "admin endpoints are only available on this Mac")
-        else:
-            if cfg.allowed_peers and peer not in cfg.allowed_peers and not _is_loopback(peer):
-                log.warning("refused request from %s (not in allowed_peers)", peer)
-                return _error(403, "forbidden", "this tailnet device isn't allowed")
-            header = request.headers.get("Authorization", "")
-            token = header[7:].strip() if header.startswith("Bearer ") else ""
-            if not hmac.compare_digest(token.encode(), cfg.agent_token.encode()):
-                return _error(401, "unauthorized", "missing or wrong token")
+        elif not _is_loopback(peer) and not _is_allowed_peer(peer, cfg.allowed_peers):
+            log.warning("refused a request from %s (not an allowed device)", peer)
+            return _error(403, "forbidden", f"This device ({peer}) isn't allowed to call. On the Mac, run: t4m peers {peer}")
         try:
             return await handler(request)
         except web.HTTPException as e:
