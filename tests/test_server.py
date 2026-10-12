@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import json
 import os
 import stat
+from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -191,3 +193,27 @@ def test_job_store_persists_privately(tmp_path, monkeypatch):
     reloaded = server.JobStore(path)
     assert reloaded.by_key("k")["id"] == "job_1"
     assert json.loads(path.read_text())[0]["id"] == "job_1"
+
+
+def test_media_job_runs_and_history_keeps_no_file_data(tmp_path, monkeypatch):
+    monkeypatch.setenv("T4M_HOME", str(tmp_path / "home"))
+    photo = base64.b64encode((Path(__file__).parent / "media" / "forecast.jpg").read_bytes()).decode()
+    h = Harness(store=server.JobStore(config.jobs_path()))
+
+    async def test(c):
+        body = {"chat_id": CHAT, "idempotency_key": "photo-1", "steps": [
+            {"action": "send_photo", "data": photo, "caption": "Saturday"},
+        ]}
+        r = await c.post("/v1/jobs", json=body)
+        assert r.status == 200
+        job = await r.json()
+        assert job["status"] == "succeeded"
+        assert job["steps"][0]["file"] == {"type": "jpeg", "size": 1260}
+        assert photo not in await r.text()
+    h.run(test)
+    assert photo[:100] not in config.jobs_path().read_text()
+    assert h.tg.calls == [("send_photo", CHAT, "jpeg", 1260, "Saturday", None)]
+
+
+def test_large_bodies_are_accepted_up_to_the_limit():
+    assert server.MAX_BODY >= 40 * 1024 * 1024

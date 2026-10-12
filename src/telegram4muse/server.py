@@ -32,7 +32,8 @@ from . import __version__, config, jobs
 
 log = logging.getLogger("telegram4muse")
 
-MAX_BODY = 64 * 1024
+# Photos (up to 10 MB) and voice notes (up to 20 MB) arrive base64-encoded in the job.
+MAX_BODY = 45 * 1024 * 1024
 KEEP_JOBS = 200
 
 
@@ -132,7 +133,7 @@ def create_app(*, load_config: Callable[[], config.Config], backend: Any, store:
     async def create_job(request):
         cfg = load_config()
         if request.content_length and request.content_length > MAX_BODY:
-            return _error(413, "body_too_large", f"body must be under {MAX_BODY} bytes")
+            return _error(413, "body_too_large", f"body must be under {MAX_BODY // (1024 * 1024)} MB")
         try:
             body = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -168,7 +169,7 @@ def create_app(*, load_config: Callable[[], config.Config], backend: Any, store:
                 "steps": spec["steps"],
             }
             # Re-read the allowlist: it may have changed while this job waited its turn.
-            report = await jobs.run_job(spec["steps"], backend, load_config().allowed_chat_ids)
+            report = await jobs.run_job(spec["steps"], backend, load_config().allowed_chat_ids, spec["files"])
             job.update(status=report["status"], finished_at=now_iso(), result={"steps": report["steps"]},
                        error=report["error"])
             store.add(job)

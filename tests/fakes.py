@@ -42,6 +42,14 @@ class FakeTelegram:
         await self._record("send_message", chat_id, text, reply_to, silent, format)
         return self._new(chat_id)
 
+    async def send_photo(self, chat_id, file, *, caption, format, silent, reply_to):
+        await self._record("send_photo", chat_id, file.type, len(file.data), caption, reply_to)
+        return self._new(chat_id)
+
+    async def send_voice(self, chat_id, file, *, caption, format, silent, reply_to):
+        await self._record("send_voice", chat_id, file.type, file.duration, caption, reply_to)
+        return self._new(chat_id)
+
     async def pin_message(self, chat_id, message_id, *, notify):
         await self._record("pin_message", chat_id, message_id, notify)
 

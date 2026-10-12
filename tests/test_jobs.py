@@ -1,4 +1,6 @@
 import asyncio
+import base64
+from pathlib import Path
 
 import pytest
 
@@ -128,3 +130,73 @@ def test_poll_results_step():
     report = run(normalize_job({"chat_id": CHAT, "steps": [{"action": "get_poll_results", "message": 5}]})["steps"], tg)
     assert report["steps"][0]["result"]["poll"]["options"][0]["voters"][0]["name"] == "Kai"
     assert tg.calls == [("get_poll_results", CHAT, 5, True)]
+
+
+MEDIA = Path(__file__).parent / "media"
+
+
+def b64(name):
+    return base64.b64encode((MEDIA / name).read_bytes()).decode()
+
+
+FRIDAY = {
+    "chat_id": CHAT,
+    "note": "Friday surf",
+    "steps": [
+        {"action": "send_poll", "question": "Surf this weekend?", "options": ["Sat", "Sun", "Out"]},
+        {"action": "send_photo", "data": b64("forecast.jpg"), "caption": "**Sat** 4-5ft", "format": "markdown",
+         "reply_to": {"step": 0}},
+        {"action": "send_voice", "data": b64("voice.ogg"), "reply_to": {"step": 0}},
+        {"action": "pin_message", "message": {"step": 0}},
+    ],
+}
+
+
+def test_media_steps_keep_only_a_summary():
+    job = normalize_job(FRIDAY)
+    photo, voice = job["steps"][1], job["steps"][2]
+    assert photo == {"action": "send_photo", "chat_id": CHAT, "file": {"type": "jpeg", "size": 1260},
+                     "caption": "**Sat** 4-5ft", "format": "markdown", "silent": False, "reply_to": {"step": 0}}
+    assert voice["file"] == {"type": "ogg", "size": 4477, "duration": 3}
+    assert voice["caption"] is None
+    assert "data" not in str(job["steps"])
+    assert set(job["files"]) == {1, 2}
+    assert job["files"][1].data == (MEDIA / "forecast.jpg").read_bytes()
+
+
+def test_media_steps_can_be_referenced():
+    job = normalize_job({"chat_id": CHAT, "steps": [
+        {"action": "send_photo", "data": b64("forecast.png")},
+        {"action": "pin_message", "message": {"step": 0}},
+    ]})
+    assert job["steps"][1]["message"] == {"step": 0}
+
+
+@pytest.mark.parametrize("step, message", [
+    ({"action": "send_photo"}, "steps[0].data must be the file's contents"),
+    ({"action": "send_photo", "data": "%%%"}, "steps[0].data isn't valid base64"),
+    ({"action": "send_photo", "data": b64("voice.ogg")}, "steps[0].data must be JPEG, PNG, not OGG"),
+    ({"action": "send_voice", "data": b64("forecast.jpg")}, "steps[0].data must be OGG, MP3, M4A, not JPEG"),
+    ({"action": "send_photo", "data": b64("forecast.jpg"), "caption": "x" * 1025}, "caption must be at most 1024"),
+    ({"action": "send_photo", "data": b64("forecast.jpg"), "duration": 3}, "duration is only for send_voice"),
+    ({"action": "send_voice", "data": b64("voice.ogg"), "duration": "long"}, "duration must be a number"),
+    ({"action": "send_voice", "data": b64("voice.ogg"), "duration": 0}, "duration must be a number"),
+])
+def test_rejects_bad_media_steps(step, message):
+    with pytest.raises(ValidationError) as e:
+        normalize_job({"chat_id": CHAT, "steps": [step]})
+    assert message in str(e.value)
+
+
+def test_runs_the_friday_chain():
+    tg = FakeTelegram()
+    job = normalize_job(FRIDAY)
+    report = asyncio.run(run_job(job["steps"], tg, {CHAT}, job["files"]))
+    assert report["status"] == "succeeded"
+    assert tg.calls == [
+        ("send_poll", CHAT, "Surf this weekend?", ("Sat", "Sun", "Out"), False, False, None),
+        ("send_photo", CHAT, "jpeg", 1260, "**Sat** 4-5ft", 101),
+        ("send_voice", CHAT, "ogg", 3, None, 101),
+        ("pin_message", CHAT, 101, False),
+    ]
+    assert [s["result"].get("message_id") for s in report["steps"]] == [101, 102, 103, None]

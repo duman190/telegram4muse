@@ -13,6 +13,8 @@ dependencies = [
     # 1.45 speaks Telegram API layer 229, whose poll format this code uses.
     "telethon>=1.45,<2",
     "aiohttp>=3.9,<4",
+    # Reads MP3/M4A voice note durations (Ogg is read directly).
+    "hachoir>=3.1",
 ]
 
 [project.optional-dependencies]

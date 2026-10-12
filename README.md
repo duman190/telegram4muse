@@ -10,8 +10,8 @@ posting to groups you allow.
  ┌──────────────┐   Tailscale     ┌───────────────────────────┐     ┌──────────┐
  │ Friday job   │ ──────────────▶ │ t4m service (launchd)     │ ──▶ │ Surf Crew│
  │ + skill      │  POST /v1/jobs  │  · Muse's device only     │     │  poll    │
- │              │ ◀────────────── │  · allowed groups only    │     │  reply   │
- └──────────────┘    result       │  · Telethon session (you) │     │  pin     │
+ │              │ ◀────────────── │  · allowed groups only    │     │  photo   │
+ └──────────────┘    result       │  · Telethon session (you) │     │  audio   │
                                   └───────────────────────────┘     └──────────┘
 ```
 
@@ -29,10 +29,11 @@ posting to groups you allow.
 
 ## What Muse can do
 
-In allowed groups only: send a poll, send a message (optionally as a reply),
-pin and unpin, close a poll, and read poll results including who voted for
-what. Jobs chain steps ("post a poll, reply to it, pin it") and are safe to
-retry. The full contract is in [muse-skill/SKILL.md](muse-skill/SKILL.md).
+In allowed groups only: send a poll, a message, a photo or a voice note
+(optionally as a reply), pin and unpin, close a poll, and read poll results
+including who voted for what. Jobs chain steps ("post a poll, reply with the
+forecast image and audio, pin it") and are safe to retry. Muse sends photos and
+audio inside the job, so the Mac never downloads anything it's pointed at. The full contract is in [muse-skill/SKILL.md](muse-skill/SKILL.md).
 
 ## Setup
 

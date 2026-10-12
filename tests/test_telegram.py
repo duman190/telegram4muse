@@ -2,11 +2,17 @@
 serialized with bytes(), which fails if it doesn't match Telegram's schema."""
 
 import asyncio
+import base64
+from pathlib import Path
 from types import SimpleNamespace
 
+from telethon import TelegramClient
+from telethon.sessions import MemorySession
 from telethon.tl import functions, types
 
-from telegram4muse import telegram
+from telegram4muse import media, telegram
+
+MEDIA = Path(__file__).parent / "media"
 
 CHAT = -1001234567890
 PEER = types.InputPeerChannel(channel_id=1234567890, access_hash=42)
@@ -187,3 +193,64 @@ def test_group_kinds():
     assert telegram.chat_kind(types.Channel(id=3, title="c", photo=types.ChatPhotoEmpty(), date=None,
                                             broadcast=True)) == "channel"
     assert telegram.chat_kind(types.User(id=4, first_name="Mom")) is None
+
+
+def prepared(kind, name):
+    return media.prepare(kind, base64.b64encode((MEDIA / name).read_bytes()).decode())
+
+
+class UploadProbe(TelegramClient):
+    """Real Telethon, with the network cut off right before the message is sent."""
+
+    def __init__(self):
+        super().__init__(MemorySession(), 1, "0" * 32)
+        self.requests = []
+
+    async def _call(self, sender, request, ordered=False, flood_sleep_threshold=None):
+        bytes(request)
+        self.requests.append(request)
+        if isinstance(request, functions.upload.SaveFilePartRequest):
+            return True
+        raise ConnectionError("not really sending")
+
+    async def get_input_entity(self, peer):
+        return PEER
+
+
+def sent_media_request(kind, name, **kwargs):
+    async def go():
+        # Created inside the loop: on Python 3.9 Telethon needs one at construction.
+        client = UploadProbe()
+        backend = telegram.TelethonBackend(client)
+        send = backend.send_photo if kind == "photo" else backend.send_voice
+        try:
+            await send(CHAT, prepared(kind, name), **kwargs)
+        except ConnectionError:
+            pass
+        return client
+
+    client = run(go())
+    assert any(isinstance(r, functions.upload.SaveFilePartRequest) for r in client.requests)
+    request = client.requests[-1]
+    assert isinstance(request, functions.messages.SendMediaRequest)
+    return request
+
+
+def test_photo_goes_out_as_a_photo_with_a_formatted_caption():
+    request = sent_media_request("photo", "forecast.jpg", caption="**Sat** 4-5ft", format="markdown",
+                                 silent=True, reply_to=7)
+    assert isinstance(request.media, types.InputMediaUploadedPhoto)
+    assert request.message == "Sat 4-5ft"
+    assert [type(e).__name__ for e in request.entities] == ["MessageEntityBold"]
+    assert request.reply_to.reply_to_msg_id == 7
+    assert request.silent is True
+
+
+def test_voice_goes_out_as_a_voice_note_with_its_length():
+    for name, mime in [("voice.ogg", "audio/ogg"), ("voice.mp3", "audio/mpeg"), ("voice.m4a", "audio/mp4")]:
+        request = sent_media_request("voice", name, caption=None, format="plain", silent=False, reply_to=None)
+        assert isinstance(request.media, types.InputMediaUploadedDocument)
+        assert request.media.mime_type == mime
+        audio = [a for a in request.media.attributes if isinstance(a, types.DocumentAttributeAudio)]
+        assert len(audio) == 1 and audio[0].voice is True and audio[0].duration == 3
+        assert request.message == ""

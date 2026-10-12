@@ -5,10 +5,11 @@ A job is a short list of steps run in order, for example:
     {"chat_id": -1001234567890,
      "steps": [{"action": "send_poll", "question": "Surf Saturday?", "options": ["Dawn", "Out"]},
                {"action": "pin_message", "message": {"step": 0}},
-               {"action": "send_message", "text": "Forecast: 4-5ft", "reply_to": {"step": 0}}]}
+               {"action": "send_photo", "data": "<base64>", "caption": "4-5ft", "reply_to": {"step": 0}}]}
 
 A step refers to a message created earlier in the same job with {"step": N},
-or to an older one with {"message_id": ID}.
+or to an older one with {"message_id": ID}. Photos and voice notes travel
+inside the job as base64; only their type and size are kept in job history.
 """
 
 from __future__ import annotations
@@ -17,18 +18,22 @@ import asyncio
 import re
 from typing import Any, Protocol
 
-ACTIONS = ("send_poll", "send_message", "pin_message", "unpin_message", "stop_poll", "get_poll_results")
-CREATES_MESSAGE = {"send_poll", "send_message"}
+from . import media
+
+ACTIONS = ("send_poll", "send_message", "send_photo", "send_voice",
+           "pin_message", "unpin_message", "stop_poll", "get_poll_results")
+CREATES_MESSAGE = {"send_poll", "send_message", "send_photo", "send_voice"}
 
 MAX_STEPS = 10
 MAX_QUESTION = 255
 MIN_OPTIONS, MAX_OPTIONS = 2, 12
 MAX_OPTION = 100
 MAX_TEXT = 4096
+MAX_CAPTION = 1024
 MAX_NOTE = 500
 MAX_KEY = 200
 FORMATS = ("plain", "markdown", "html")
-STEP_TIMEOUT = 90  # seconds; Telethon itself waits out short flood limits
+STEP_TIMEOUT = 180  # seconds: room for uploads; Telethon also waits out short flood limits
 
 
 class ValidationError(ValueError):
@@ -92,7 +97,14 @@ def _message_ref(value: Any, where: str, index: int, steps: list[dict], chat_id:
     return {"message_id": message_id}
 
 
-def _step(raw: Any, index: int, steps: list[dict], default_chat: Any) -> dict:
+def _format(raw: dict, where: str) -> str:
+    value = raw.get("format", "plain")
+    if value not in FORMATS:
+        _fail(f"{where}.format must be one of: {', '.join(FORMATS)}")
+    return value
+
+
+def _step(raw: Any, index: int, steps: list[dict], default_chat: Any, files: dict[int, media.File]) -> dict:
     where = f"steps[{index}]"
     if not isinstance(raw, dict):
         _fail(f"{where} must be an object")
@@ -123,9 +135,26 @@ def _step(raw: Any, index: int, steps: list[dict], default_chat: Any) -> dict:
             step["reply_to"] = ref("reply_to")
     elif action == "send_message":
         step["text"] = _text(raw.get("text"), f"{where}.text", MAX_TEXT)
-        step["format"] = raw.get("format", "plain")
-        if step["format"] not in FORMATS:
-            _fail(f"{where}.format must be one of: {', '.join(FORMATS)}")
+        step["format"] = _format(raw, where)
+        step["silent"] = _flag(raw.get("silent"), f"{where}.silent", False)
+        if raw.get("reply_to") is not None:
+            step["reply_to"] = ref("reply_to")
+    elif action in ("send_photo", "send_voice"):
+        kind = "photo" if action == "send_photo" else "voice"
+        duration = raw.get("duration")
+        if duration is not None:
+            if kind == "photo":
+                _fail(f"{where}.duration is only for send_voice")
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 0 < duration <= 86400:
+                _fail(f"{where}.duration must be a number of seconds")
+        try:
+            file = media.prepare(kind, raw.get("data"), duration)
+        except ValueError as e:
+            _fail(f"{where}.data {e}")
+        files[index] = file
+        step["file"] = file.summary()
+        step["caption"] = _text(raw.get("caption"), f"{where}.caption", MAX_CAPTION, required=False)
+        step["format"] = _format(raw, where)
         step["silent"] = _flag(raw.get("silent"), f"{where}.silent", False)
         if raw.get("reply_to") is not None:
             step["reply_to"] = ref("reply_to")
@@ -153,10 +182,13 @@ def normalize_job(body: Any) -> dict:
     if len(raw_steps) > MAX_STEPS:
         _fail(f"at most {MAX_STEPS} steps per job")
     steps: list[dict] = []
+    files: dict[int, media.File] = {}
     for i, raw in enumerate(raw_steps):
-        steps.append(_step(raw, i, steps, body.get("chat_id")))
+        steps.append(_step(raw, i, steps, body.get("chat_id"), files))
     return {
         "steps": steps,
+        # Step index -> decoded photo or voice note. Not JSON; never stored.
+        "files": files,
         "note": _text(body.get("note"), "note", MAX_NOTE, required=False),
         "idempotency_key": _text(body.get("idempotency_key"), "idempotency_key", MAX_KEY, required=False),
     }
@@ -170,6 +202,12 @@ class TelegramActions(Protocol):
 
     async def send_message(self, chat_id: int, text: str, *, silent: bool, reply_to: int | None,
                            format: str) -> dict: ...
+
+    async def send_photo(self, chat_id: int, file: media.File, *, caption: str | None, format: str,
+                         silent: bool, reply_to: int | None) -> dict: ...
+
+    async def send_voice(self, chat_id: int, file: media.File, *, caption: str | None, format: str,
+                         silent: bool, reply_to: int | None) -> dict: ...
 
     async def pin_message(self, chat_id: int, message_id: int, *, notify: bool) -> None: ...
 
@@ -188,7 +226,7 @@ def _resolve(ref: dict, created: dict[int, int]) -> int:
     return created[ref["step"]]
 
 
-async def _perform(step: dict, tg: TelegramActions, created: dict[int, int]) -> dict:
+async def _perform(step: dict, tg: TelegramActions, created: dict[int, int], file: media.File | None) -> dict:
     action, chat = step["action"], step["chat_id"]
     if action == "send_poll":
         reply_to = _resolve(step["reply_to"], created) if "reply_to" in step else None
@@ -199,6 +237,13 @@ async def _perform(step: dict, tg: TelegramActions, created: dict[int, int]) -> 
         reply_to = _resolve(step["reply_to"], created) if "reply_to" in step else None
         return await tg.send_message(chat, step["text"], silent=step["silent"], reply_to=reply_to,
                                      format=step["format"])
+    if action in ("send_photo", "send_voice"):
+        if file is None:
+            raise RuntimeError("the file for this step is missing")
+        reply_to = _resolve(step["reply_to"], created) if "reply_to" in step else None
+        send = tg.send_photo if action == "send_photo" else tg.send_voice
+        return await send(chat, file, caption=step["caption"], format=step["format"], silent=step["silent"],
+                          reply_to=reply_to)
     message_id = _resolve(step["message"], created)
     if action == "pin_message":
         await tg.pin_message(chat, message_id, notify=step["notify"])
@@ -221,7 +266,7 @@ def _describe(error: BaseException) -> str:
 
 
 async def run_job(steps: list[dict], tg: TelegramActions, allowed_chat_ids: set[int],
-                  step_timeout: float = STEP_TIMEOUT) -> dict:
+                  files: dict[int, media.File] | None = None, step_timeout: float = STEP_TIMEOUT) -> dict:
     """Runs normalized steps in order. Stops at the first failure and marks the
     rest skipped. Refuses the whole job, sending nothing, if any step targets a
     chat that isn't allowed."""
@@ -241,7 +286,7 @@ async def run_job(steps: list[dict], tg: TelegramActions, allowed_chat_ids: set[
             outcomes.append({"index": i, "action": step["action"], "ok": False, "skipped": True})
             continue
         try:
-            result = await asyncio.wait_for(_perform(step, tg, created), step_timeout)
+            result = await asyncio.wait_for(_perform(step, tg, created, (files or {}).get(i)), step_timeout)
         except Exception as e:  # noqa: BLE001 - reported back to Muse
             error = f"step {i} ({step['action']}) failed: {_describe(e)}"
             outcomes.append({"index": i, "action": step["action"], "ok": False, "error": _describe(e)})

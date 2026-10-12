@@ -1,6 +1,6 @@
 ---
 name: telegram4muse
-description: Post polls and messages, pin or unpin them, close polls, and read poll results in Dmitrii's allowed Telegram groups. Posts go out as Dmitrii, from Dmitrii's Mac, over Tailscale. Use it for the weekly surf poll and any other posting to those groups.
+description: Post polls, messages, photos and voice notes, pin or unpin them, close polls, and read poll results in Dmitrii's allowed Telegram groups. Posts go out as Dmitrii, from Dmitrii's Mac, over Tailscale. Use it for the weekly surf poll and any other posting to those groups.
 ---
 
 # Telegram4Muse
@@ -27,7 +27,8 @@ curl -s "$T4M_URL/v1/chats"
 curl -s "$T4M_URL/v1/jobs" -H "Content-Type: application/json" -d @job.json
 ```
 
-Allow up to 2 minutes for `POST /v1/jobs`; reading voters on a big poll takes a while.
+Allow up to 5 minutes for `POST /v1/jobs`: uploading photos and voice notes,
+or reading voters on a big poll, takes a while.
 
 ## Rules
 
@@ -55,12 +56,28 @@ created with `{"step": N}`, or at an older message with `{"message_id": ID}`.
 |---|---|---|
 | `send_poll` | `question` (≤255 chars), `options` (2-12, each ≤100); optional `is_anonymous` (default false), `allows_multiple_answers` (false), `silent` (false), `reply_to` | `message_id`, `chat_id`, `link` |
 | `send_message` | `text` (≤4096); optional `format`: `plain` (default), `markdown` (`**bold**`, `__italic__`, `[text](url)`) or `html`; `silent`, `reply_to` | `message_id`, `chat_id`, `link` |
+| `send_photo` | `data`: the image, base64 (JPEG or PNG, ≤10 MB); optional `caption` (≤1024), `format`, `silent`, `reply_to` | `message_id`, `chat_id`, `link` |
+| `send_voice` | `data`: the audio, base64 (OGG Opus preferred; MP3 or M4A also work; ≤20 MB); optional `caption` (≤1024), `format`, `silent`, `reply_to`, `duration` in seconds (read from the file if left out) | `message_id`, `chat_id`, `link` |
 | `pin_message` | `message`; optional `notify` (default false: pin quietly) | |
 | `unpin_message` | `message` | |
 | `stop_poll` | `message` (already closed is fine) | |
 | `get_poll_results` | `message`; optional `include_voters` (default true) | `poll`: `question`, `total_voter_count`, `is_closed`, `options` with `text`, `voter_count`, `vote_percentage` and, for non-anonymous polls, `voters` (`name`, `username`) |
 
 Optional job fields: `note` (a short label for the Mac's log), `idempotency_key`.
+
+**Files go inside the job, base64-encoded** (a `data:image/png;base64,` prefix
+is fine). The Mac doesn't download URLs, so fetch an image first and send its
+bytes. Job history keeps only each file's type and size. Captions are limited to
+1024 characters; put a longer forecast in a `send_message` reply instead.
+
+```python
+import base64, json
+def b64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+job = {"chat_id": CHAT_ID, "steps": [{"action": "send_photo", "data": b64("forecast.png"), "caption": "..."}]}
+json.dump(job, open("job.json", "w"))
+```
 
 The response is the finished job: `status` is `succeeded` or `failed`. On
 failure, `error` says what went wrong, and `result.steps[i]` shows which steps
@@ -78,8 +95,9 @@ Errors before anything runs come back as `{"error": {"code", "message"}}`:
 Friday morning, after the forecast:
 
 1. `GET /v1/chats` and find the surf group's `id`.
-2. Post, reply with the forecast, pin. If you saved last week's poll id, close
-   and unpin it **last**, so a problem with the old poll can't block the new one:
+2. Post the poll, reply to it with the forecast image (forecast in the caption)
+   and the audio, then pin the poll. If you saved last week's poll id, close and
+   unpin it **last**, so a problem with the old poll can't block the new one:
 
 ```json
 {
@@ -90,8 +108,9 @@ Friday morning, after the forecast:
     {"action": "send_poll", "question": "Surf this weekend?",
      "options": ["Sat dawn patrol", "Sat midday", "Sunday", "Out this week"],
      "allows_multiple_answers": true},
-    {"action": "send_message", "reply_to": {"step": 0}, "format": "markdown",
-     "text": "**Forecast** Sat: 4-5ft, offshore till 10. Sun: 3ft, onshore by noon."},
+    {"action": "send_photo", "reply_to": {"step": 0}, "data": "<forecast image, base64>",
+     "format": "markdown", "caption": "**Forecast** Sat: 4-5ft, offshore till 10. Sun: 3ft, onshore by noon."},
+    {"action": "send_voice", "reply_to": {"step": 0}, "data": "<audio, base64>"},
     {"action": "pin_message", "message": {"step": 0}},
     {"action": "unpin_message", "message": {"message_id": 4182}},
     {"action": "stop_poll", "message": {"message_id": 4182}}

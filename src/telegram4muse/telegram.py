@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import platform
 import random
 from getpass import getpass
@@ -10,9 +11,10 @@ from typing import Any
 from telethon import TelegramClient
 from telethon.tl import functions, types
 
-from . import __version__, config
+from . import __version__, config, media
 
 MAX_VOTERS = 1000
+PARSE_MODES = {"plain": None, "markdown": "md", "html": "html"}
 
 
 def make_client(cfg: config.Config) -> TelegramClient:
@@ -156,9 +158,30 @@ class TelethonBackend:
 
     async def send_message(self, chat_id, text, *, silent, reply_to, format="plain"):
         peer = await self._peer(chat_id)
-        parse_mode = {"plain": None, "markdown": "md", "html": "html"}[format]
-        message = await self.client.send_message(peer, text, reply_to=reply_to, silent=silent, parse_mode=parse_mode)
+        message = await self.client.send_message(peer, text, reply_to=reply_to, silent=silent,
+                                                 parse_mode=PARSE_MODES[format])
         return await self._sent(chat_id, message)
+
+    async def _send_file(self, chat_id, file: media.File, *, caption, format, silent, reply_to, voice: bool):
+        peer = await self._peer(chat_id)
+        stream = io.BytesIO(file.data)
+        stream.name = file.name  # Telethon picks photo vs. document from the name
+        attributes = None
+        if voice:
+            attributes = [types.DocumentAttributeAudio(duration=file.duration or 0, voice=True)]
+        message = await self.client.send_file(
+            peer, stream, caption=caption or "", parse_mode=PARSE_MODES[format], reply_to=reply_to,
+            silent=silent, mime_type=file.mime_type, voice_note=voice, attributes=attributes,
+        )
+        return await self._sent(chat_id, message)
+
+    async def send_photo(self, chat_id, file, *, caption, format, silent, reply_to):
+        return await self._send_file(chat_id, file, caption=caption, format=format, silent=silent,
+                                     reply_to=reply_to, voice=False)
+
+    async def send_voice(self, chat_id, file, *, caption, format, silent, reply_to):
+        return await self._send_file(chat_id, file, caption=caption, format=format, silent=silent,
+                                     reply_to=reply_to, voice=True)
 
     async def pin_message(self, chat_id, message_id, *, notify):
         await self.client.pin_message(await self._peer(chat_id), message_id, notify=notify)
