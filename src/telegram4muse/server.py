@@ -107,9 +107,16 @@ def create_app(*, load_config: Callable[[], config.Config], backend: Any, store:
             log.warning("refused a request from %s (not an allowed device)", peer)
             return _error(403, "forbidden", f"This device ({peer}) isn't allowed to call. On the Mac, run: t4m peers {peer}")
         try:
-            return await handler(request)
+            response = await handler(request)
         except web.HTTPException as e:
-            return _error(e.status, e.reason.lower().replace(" ", "_"), e.reason)
+            response = _error(e.status, e.reason.lower().replace(" ", "_"), e.reason)
+        if not _is_loopback(peer):
+            # One line per call from Muse, so the log shows whether it got here.
+            if response.status >= 400:
+                log.warning("%s %s from %s: %d %s", request.method, request.path, peer, response.status, response.text)
+            else:
+                log.info("%s %s from %s: %d", request.method, request.path, peer, response.status)
+        return response
 
     async def healthz(_request):
         return web.json_response({"ok": True})
@@ -217,6 +224,7 @@ async def serve() -> None:
     host = tailscale.resolve_host(cfg.host)
     client = telegram.make_client(cfg)
     await client.connect()
+    watchdog = asyncio.create_task(telegram.keep_connected(client))
     backend = telegram.TelethonBackend(client)
     if await backend.account() is None:
         log.warning("Not signed in to Telegram yet. Run `t4m login`; jobs will fail until then.")
@@ -235,5 +243,6 @@ async def serve() -> None:
         loop.add_signal_handler(sig, stop.set)
     await stop.wait()
     log.info("Stopping")
+    watchdog.cancel()
     await runner.cleanup()
     await client.disconnect()

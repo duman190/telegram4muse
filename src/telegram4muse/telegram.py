@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
 import platform
 import random
 from getpass import getpass
@@ -14,6 +16,8 @@ from telethon.tl import functions, types
 from . import __version__, config, media
 
 MAX_VOTERS = 1000
+RECONNECT_EVERY = 30  # seconds
+log = logging.getLogger("telegram4muse")
 PARSE_MODES = {"plain": None, "markdown": "md", "html": "html"}
 
 
@@ -49,6 +53,31 @@ async def login(cfg: config.Config) -> str:
     finally:
         config.session_path().with_suffix(".session").chmod(0o600)
         await client.disconnect()
+
+
+async def keep_connected(client: TelegramClient, every: float = RECONNECT_EVERY) -> None:
+    """Runs for the life of the service. Telethon retries a dropped connection
+    for about half a minute, then gives up (the Mac slept, Wi-Fi went away).
+    This notices, says so in the log, and keeps trying until Telegram is back,
+    so the service is ready before Muse's next request rather than after it."""
+    while True:
+        try:
+            await client.disconnected  # resolves when Telethon gives up
+            log.warning("Lost the connection to Telegram")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - the reason it gave up
+            log.warning("Lost the connection to Telegram (%s)", e)
+        log.info("Will reconnect to Telegram every %ds until the network is back", every)
+        while not client.is_connected():
+            await asyncio.sleep(every)
+            try:
+                await client.connect()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - still offline; try again later
+                continue
+            log.info("Reconnected to Telegram")
 
 
 async def account_name(client: TelegramClient) -> str:

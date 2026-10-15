@@ -106,7 +106,10 @@ Friday job at it. If Muse gets `403 forbidden`, the error includes the exact
 **The Mac has to be awake.** A sleeping Mac is off the tailnet, so Muse's
 request fails (Muse is told to report it and retry later). With the lid open
 and on power, `--keep-awake` prevents idle sleep. Closing the lid still sleeps
-a MacBook unless an external display is attached.
+a MacBook unless an external display is attached. After a sleep or a Wi-Fi drop
+the service reconnects to Telegram by itself ("Reconnected to Telegram" in the
+log). Every call from Muse gets a log line, so if a Friday run is missing from
+the log, Muse never reached the Mac.
 
 **Lock Muse's device down in Tailscale (recommended).** Muse can currently
 reach every device on your tailnet, including the iPhone and iPads. In the

@@ -254,3 +254,55 @@ def test_voice_goes_out_as_a_voice_note_with_its_length():
         audio = [a for a in request.media.attributes if isinstance(a, types.DocumentAttributeAudio)]
         assert len(audio) == 1 and audio[0].voice is True and audio[0].duration == 3
         assert request.message == ""
+
+
+class FlakyClient:
+    """Drops the connection once, stays offline for one retry, then comes back."""
+
+    def __init__(self):
+        self.connected = False
+        self.connect_calls = 0
+        self.drop = asyncio.get_running_loop().create_future()
+        self.drop.set_exception(ConnectionError("Connection to Telegram failed 5 time(s)"))
+        self.forever = asyncio.get_running_loop().create_future()
+
+    @property
+    def disconnected(self):
+        return self.drop if not self.drop_seen() else self.forever
+
+    def drop_seen(self):
+        return self.connect_calls > 0
+
+    def is_connected(self):
+        return self.connected
+
+    async def connect(self):
+        self.connect_calls += 1
+        if self.connect_calls == 1:
+            raise OSError(51, "Network is unreachable")
+        self.connected = True
+
+
+def test_reconnects_after_telethon_gives_up(caplog):
+    caplog.set_level("INFO", logger="telegram4muse")
+
+    async def go():
+        client = FlakyClient()
+        task = asyncio.create_task(telegram.keep_connected(client, every=0.01))
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if client.connected:
+                break
+        await asyncio.sleep(0.05)  # back to waiting on the (healthy) connection
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return client
+
+    client = run(go())
+    assert client.connected and client.connect_calls == 2
+    messages = [r.getMessage() for r in caplog.records]
+    assert "Lost the connection to Telegram (Connection to Telegram failed 5 time(s))" in messages
+    assert "Reconnected to Telegram" in messages

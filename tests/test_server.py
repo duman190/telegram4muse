@@ -217,3 +217,22 @@ def test_media_job_runs_and_history_keeps_no_file_data(tmp_path, monkeypatch):
 
 def test_large_bodies_are_accepted_up_to_the_limit():
     assert server.MAX_BODY >= 40 * 1024 * 1024
+
+
+def test_calls_from_muse_are_logged(caplog):
+    caplog.set_level("INFO", logger="telegram4muse")
+
+    async def test(c):
+        await c.get("/v1/chats")
+        await c.post("/v1/jobs", json={**SURF, "chat_id": -1009})
+    Harness().run(test)
+    messages = [r.getMessage() for r in caplog.records]
+    assert f"GET /v1/chats from {MUSE}: 200" in messages
+    assert any(m.startswith(f"POST /v1/jobs from {MUSE}: 403") and "chat_not_allowed" in m for m in messages)
+
+    caplog.clear()
+
+    async def local(c):
+        await c.get("/v1/chats")
+    Harness(peer="127.0.0.1").run(local)
+    assert not any("/v1/chats" in r.getMessage() for r in caplog.records)  # the CLI's own calls stay quiet
